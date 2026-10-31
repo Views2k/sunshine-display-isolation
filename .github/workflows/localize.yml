@@ -14,6 +14,8 @@ on:
 
 jobs:
   localize:
+    if: >-
+      github.repository == 'LizardByte/Sunshine'
     name: Update Localization
     permissions:
       contents: read
