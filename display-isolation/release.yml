@@ -35,7 +35,7 @@ jobs:
           test "$RELEASE_TAG" = v2026.1030.1
           test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
           mkdir input
-          gh release download "$RELEASE_TAG" --pattern reviewed-build.zip --dir input
+          gh release download "$RELEASE_TAG" --pattern build.zip --dir input
           python3 display-isolation/package_release.py
       - name: Exercise the published selection policy
         run: |
@@ -71,5 +71,5 @@ jobs:
           Path('release-files/SHA256SUMS.txt').write_text(''.join(f'{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n' for path in files), encoding='utf-8')
           PY
           gh release upload "$RELEASE_TAG" release-files/*
-          gh release delete-asset "$RELEASE_TAG" reviewed-build.zip --yes
+          gh release delete-asset "$RELEASE_TAG" build.zip --yes
           gh release edit "$RELEASE_TAG" --target "$GITHUB_SHA" --draft=false --latest

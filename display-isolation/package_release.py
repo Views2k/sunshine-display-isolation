@@ -22,7 +22,7 @@ EXPECTED = {
 
 root = Path(__file__).resolve().parents[1]
 verify(root)
-archive = root / "input/reviewed-build.zip"
+archive = root / "input/build.zip"
 if hashlib.sha256(archive.read_bytes()).hexdigest() != "d60a930759b86e1775cde78dee1d5f1fc081eddb09861a30876d5f87156c4e8e":
     raise RuntimeError("Reviewed archive hash mismatch")
 extracted = root / "input/extracted"
