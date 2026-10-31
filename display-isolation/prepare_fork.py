@@ -1,8 +1,10 @@
 from pathlib import Path
 import os
+import json
 import shutil
 import subprocess
 import sys
+import urllib.request
 
 BASE = "63d35f702ee9e362e43263742981836ec0710384"
 BRANCH = "display-isolation"
@@ -41,5 +43,35 @@ subprocess.run([
     ":(exclude)display-isolation/reference.patch",
 ], check=True)
 git(target, "commit", "-m", "Keep Windows capture bound to its configured display")
-subprocess.run(["git", "-C", str(target), "push", "origin", f"HEAD:refs/heads/{BRANCH}"], check=True)
-print("Published source branch:", git(target, "rev-parse", "HEAD"))
+
+
+def api(path, data):
+    request = urllib.request.Request(
+        "https://api.github.com/repos/Views2k/sunshine-display-isolation/" + path,
+        data=json.dumps(data).encode(),
+        headers={
+            "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return json.load(response)
+
+
+entries = []
+for path in git(target, "diff", "--name-only", BASE, "HEAD").splitlines():
+    content = subprocess.check_output(["git", "-C", str(target), "show", "HEAD:" + path]).decode("utf-8")
+    entries.append({"path": path, "mode": "100644", "type": "blob", "content": content})
+tree = api("git/trees", {"base_tree": git(target, "rev-parse", BASE + "^{tree}"), "tree": entries})
+if tree["sha"] != git(target, "rev-parse", "HEAD^{tree}"):
+    raise RuntimeError("Remote source tree differs from the verified local tree")
+identity = {"name": author_name, "email": author_email}
+commit = api("git/commits", {
+    "message": "Keep Windows capture bound to its configured display",
+    "tree": tree["sha"], "parents": [BASE], "author": identity, "committer": identity,
+})
+print("Prepared source commit:", commit["sha"])
+print("Verified source tree:", tree["sha"])
