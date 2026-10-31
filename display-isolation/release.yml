@@ -1,0 +1,75 @@
+name: Publish reviewed Windows release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Draft release tag
+        required: true
+        default: v2026.1030.1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-reviewed-windows
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'Views2k/sunshine-display-isolation' && github.ref == 'refs/heads/display-isolation'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+      - name: Verify the draft and obtain the reviewed build
+        run: |
+          set -euo pipefail
+          test "$RELEASE_TAG" = v2026.1030.1
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+          mkdir input
+          gh release download "$RELEASE_TAG" --pattern reviewed-build.zip --dir input
+          python3 display-isolation/package_release.py
+      - name: Exercise the published selection policy
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Werror -pedantic -I src display-isolation/test_strict_display_policy.cpp -o "$RUNNER_TEMP/policy-tests"
+          "$RUNNER_TEMP/policy-tests"
+      - name: Scan the complete release with current definitions
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y clamav clamav-freshclam
+          if systemctl is-active --quiet clamav-freshclam; then
+            sudo systemctl stop clamav-freshclam
+          fi
+          sudo freshclam
+          mkdir release-files
+          clamscan --version > release-files/scan-engine.txt
+          clamscan --recursive=yes --scan-archive=yes --heuristic-alerts=yes --alert-exceeds-max=yes --max-filesize=500M --max-scansize=2G --log=release-files/malware-scan.txt release-package
+      - name: Package and publish the verified release
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import zipfile
+          root = Path('release-package')
+          output = Path('release-files/sunshine-display-isolation-windows-x64-2026.1030.1.zip')
+          with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+              for path in sorted(root.rglob('*')):
+                  if path.is_file():
+                      archive.write(path, path.relative_to(root).as_posix())
+          files = sorted(Path('release-files').glob('*'))
+          Path('release-files/SHA256SUMS.txt').write_text(''.join(f'{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n' for path in files), encoding='utf-8')
+          PY
+          gh release upload "$RELEASE_TAG" release-files/*
+          gh release delete-asset "$RELEASE_TAG" reviewed-build.zip --yes
+          gh release edit "$RELEASE_TAG" --target "$GITHUB_SHA" --draft=false --latest
