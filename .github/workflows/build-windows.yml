@@ -1,0 +1,168 @@
+name: Windows display isolation
+permissions:
+  contents: read
+concurrency:
+  group: display-isolation-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  UPSTREAM_REVISION: 63d35f702ee9e362e43263742981836ec0710384
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - name: Compile and exercise selection policy
+      run: 'g++ -std=c++20 -Wall -Wextra -Werror -pedantic -I src display-isolation/test_strict_display_policy.cpp -o policy-tests
+
+        ./policy-tests
+
+        '
+    - name: Verify the reviewed source
+      run: 'python3 display-isolation/verify_source.py
+
+        git diff --check 63d35f702ee9e362e43263742981836ec0710384 HEAD -- . ":(exclude)display-isolation/reference.patch"
+
+        '
+  windows:
+    needs: preflight
+    runs-on: windows-2022
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+    - name: Enable long paths for the runner's nested dependency checkout
+      shell: pwsh
+      run: 'git config --global core.longpaths true
+
+        if ($LASTEXITCODE -ne 0) { throw ''Could not enable long paths for Git'' }
+
+        '
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        submodules: recursive
+    - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884
+      with:
+        msystem: UCRT64
+        update: true
+        install: git mingw-w64-ucrt-x86_64-boost mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-cppwinrt mingw-w64-ucrt-x86_64-curl-winssl
+          mingw-w64-ucrt-x86_64-miniupnpc mingw-w64-ucrt-x86_64-nlohmann-json mingw-w64-ucrt-x86_64-onevpl mingw-w64-ucrt-x86_64-openssl
+          mingw-w64-ucrt-x86_64-opus mingw-w64-ucrt-x86_64-toolchain mingw-w64-ucrt-x86_64-qt6-static mingw-w64-ucrt-x86_64-dbus
+          mingw-w64-ucrt-x86_64-freetype mingw-w64-ucrt-x86_64-harfbuzz mingw-w64-ucrt-x86_64-libjpeg-turbo mingw-w64-ucrt-x86_64-libpng
+          mingw-w64-ucrt-x86_64-libtiff mingw-w64-ucrt-x86_64-libwebp mingw-w64-ucrt-x86_64-pcre2 mingw-w64-ucrt-x86_64-zlib
+          mingw-w64-ucrt-x86_64-MinHook mingw-w64-ucrt-x86_64-nsis
+    - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+      with:
+        dotnet-version: 10.x
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      with:
+        node-version: '24'
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: '3.14'
+    - name: Record native tool paths and verify source
+      shell: pwsh
+      run: '$ErrorActionPreference = ''Stop''
+
+        ''NODEJS_PATH='' + (Split-Path (Get-Command node).Source -Parent) | Add-Content $env:GITHUB_ENV
+
+        python display-isolation/verify_source.py
+
+        if ($LASTEXITCODE -ne 0) { throw ''Source verification failed'' }
+
+        git diff --check
+
+        if ($LASTEXITCODE -ne 0) { throw ''Source whitespace validation failed'' }
+
+        '
+    - name: Compile policy tests with the production toolchain
+      run: 'set -euo pipefail
+
+        g++ -std=c++20 -Wall -Wextra -Werror -pedantic -I src display-isolation/test_strict_display_policy.cpp -o policy-tests.exe
+
+        ./policy-tests.exe
+
+        '
+    - name: Build Sunshine and its test executable
+      env:
+        BRANCH: display-isolation
+        BUILD_VERSION: 2026.1030.1
+        COMMIT: ${{ github.sha }}
+      run: "set -euo pipefail\nexport PATH=\"$PATH:$(cygpath \"$NODEJS_PATH\")\"\ncmake -S . -B build -G Ninja \\\n  -DCMAKE_BUILD_TYPE=RelWithDebInfo\
+        \ \\\n  -DBUILD_WERROR=ON -DBUILD_DOCS=OFF -DBUILD_TESTS=ON \\\n  -DSUNSHINE_ASSETS_DIR=assets \\\n  -DSUNSHINE_PUBLISHER_NAME=Views2k\
+        \ \\\n  -DSUNSHINE_PUBLISHER_WEBSITE=https://github.com/Views2k/sunshine-display-isolation \\\n  -DSUNSHINE_PUBLISHER_ISSUE_URL=https://github.com/Views2k/sunshine-display-isolation/issues\n\
+        cmake --build build --parallel 3 --target sunshine test_sunshine\n"
+    - name: Run existing display configuration tests
+      working-directory: build/tests
+      run: 'set -euo pipefail
+
+        ./test_sunshine.exe --gtest_color=yes --gtest_filter=''DisplayDeviceConfigTest/*'' --gtest_output=xml:display-test-results.xml
+
+        '
+    - name: Verify display tests actually ran
+      shell: pwsh
+      run: "$ErrorActionPreference = 'Stop'\n[xml]$results = Get-Content build/tests/display-test-results.xml -Raw\nif ([int]$results.testsuites.tests\
+        \ -lt 1 -or [int]$results.testsuites.failures -ne 0 -or [int]$results.testsuites.errors -ne 0) {\n  throw 'Expected\
+        \ passing display configuration tests'\n}\n"
+    - name: Validate executable runtime dependencies
+      run: "set -euo pipefail\nmkdir -p artifacts\nldd build/sunshine.exe | tee artifacts/linkage.txt\nunexpected=\"$(awk\
+        \ '\n  BEGIN { IGNORECASE = 1 }\n  $1 == \"zlib1.dll\" { next }\n  $1 ~ /^api-ms-win-/ { next }\n  $1 ~ /^ext-ms-win-/\
+        \ { next }\n  $0 ~ /=>[[:space:]]+not found/ { print }\n  $0 ~ /=>[[:space:]]+\\/(clangarm64|clang64|mingw32|mingw64|ucrt64)\\\
+        /bin\\// { print }\n' artifacts/linkage.txt)\"\nif [[ -n \"$unexpected\" ]]; then\n  echo \"$unexpected\"\n  exit\
+        \ 1\nfi\ncp build/sunshine.exe artifacts/sunshine.exe\ncp /ucrt64/bin/zlib1.dll artifacts/zlib1.dll\ncp build/tests/display-test-results.xml\
+        \ artifacts/display-test-results.xml\ngit diff 63d35f702ee9e362e43263742981836ec0710384 -- src/video.cpp src/platform/windows/display_base.cpp\
+        \ > artifacts/source.patch\ncp src/strict_display_policy.h artifacts/strict_display_policy.h\npacman -Q > artifacts/toolchain-packages.txt\n"
+    - name: Record exact build provenance
+      shell: pwsh
+      run: "$ErrorActionPreference = 'Stop'\n$files = @(Get-ChildItem artifacts -File | ForEach-Object {\n  @{ Name = $_.Name;\
+        \ SHA256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash }\n})\n@{\n  UpstreamRevision = $env:UPSTREAM_REVISION\n\
+        \  PatchRevision = $env:GITHUB_SHA\n  BuildRun = $env:GITHUB_RUN_ID\n  Version = '2026.1030.1'\n  Files = $files\n\
+        \  ValidationScope = 'Build, selection policy, display configuration and linkage'\n  MalwareScan = 'Separate malware-scan\
+        \ job required'\n} | ConvertTo-Json -Depth 5 | Set-Content artifacts/provenance.json\n"
+    - name: Upload build and verification evidence
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: sunshine-display-isolation-windows-amd64-${{ github.sha }}
+        path: artifacts/
+        if-no-files-found: error
+        retention-days: 14
+  malware-scan:
+    needs: windows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: sunshine-display-isolation-windows-amd64-${{ github.sha }}
+        path: artifacts
+    - name: Verify artifact hashes before scanning
+      run: "python3 - <<'PY'\nimport hashlib\nimport json\nfrom pathlib import Path\nroot = Path('artifacts')\nprovenance\
+        \ = json.loads((root / 'provenance.json').read_text(encoding='utf-8-sig'))\nfor entry in provenance['Files']:\n  \
+        \  name = entry['Name']\n    if Path(name).name != name:\n        raise SystemExit('Invalid artifact path')\n    digest\
+        \ = hashlib.sha256((root / name).read_bytes()).hexdigest()\n    if digest.lower() != entry['SHA256'].lower():\n  \
+        \      raise SystemExit('Artifact hash mismatch: ' + name)\nprint('Every recorded artifact hash matches')\nPY\n"
+    - name: Scan with updated malware definitions
+      run: "set -euo pipefail\nsudo apt-get update\nsudo apt-get install --no-install-recommends -y clamav clamav-freshclam\n\
+        if systemctl is-active --quiet clamav-freshclam; then\n  sudo systemctl stop clamav-freshclam\nfi\nsudo freshclam\n\
+        mkdir scan-results\nclamscan --version | tee scan-results/engine-version.txt\nclamscan --recursive=yes --scan-archive=yes\
+        \ --heuristic-alerts=yes --alert-exceeds-max=yes \\\n  --max-filesize=500M --max-scansize=2G --log=scan-results/clamav.log\
+        \ artifacts\nsha256sum artifacts/* > scan-results/SHA256SUMS\n"
+    - name: Preserve scan evidence
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: sunshine-display-isolation-scan-${{ github.sha }}
+        path: scan-results/
+        if-no-files-found: warn
+        retention-days: 14
+'on':
+  workflow_dispatch: null
+  pull_request:
+    branches:
+    - display-isolation

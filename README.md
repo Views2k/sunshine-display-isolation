@@ -12,7 +12,7 @@ The changes were made on October 30, 2026, against Sunshine revision `63d35f702e
 
 ## Windows setup
 
-1. Start with Sunshine `2026.914.233613` and configure the display to stream in its web interface.
+1. Start with [Sunshine 2026.914.233613](https://github.com/LizardByte/Sunshine/releases/tag/v2026.914.233613) and configure the display to stream in its web interface.
 2. Download the Windows update ZIP from [Releases](https://github.com/Views2k/sunshine-display-isolation/releases).
 3. Stop the Sunshine instance being updated and back up its `sunshine.exe` and `zlib1.dll`.
 4. Extract those two files into that instance's Sunshine folder, then start Sunshine and reconnect Moonlight.
