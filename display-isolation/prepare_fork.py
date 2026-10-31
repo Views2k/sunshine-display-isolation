@@ -27,9 +27,6 @@ subprocess.run([sys.executable, str(root / "display-isolation/apply_patch.py"), 
 shutil.copytree(root / "display-isolation", target / "display-isolation")
 shutil.copy2(root / "display-isolation/README.md", target / "README.md")
 shutil.copy2(root / "display-isolation/NOTICE.md", target / "NOTICE.md")
-workflow_root = target / ".github/workflows"
-for name in ("build-windows.yml", "release.yml"):
-    shutil.copy2(root / "display-isolation" / name, workflow_root / name)
 for name in ("README.md", "NOTICE.md", "build-windows.yml", "release.yml", "prepare_fork.py", "apply_patch.py", "strict_display_policy.h"):
     (target / "display-isolation" / name).unlink()
 subprocess.run([sys.executable, str(target / "display-isolation/verify_source.py")], check=True)
@@ -38,7 +35,7 @@ subprocess.run([str(target.parent / "policy-tests")], check=True)
 git(target, "config", "user.name", author_name)
 git(target, "config", "user.email", author_email)
 git(target, "switch", "-c", BRANCH)
-git(target, "add", "src/video.cpp", "src/platform/windows/display_base.cpp", "src/strict_display_policy.h", "README.md", "NOTICE.md", "display-isolation", ".github/workflows")
+git(target, "add", "src/video.cpp", "src/platform/windows/display_base.cpp", "src/strict_display_policy.h", "README.md", "NOTICE.md", "display-isolation")
 git(target, "diff", "--cached", "--check")
 git(target, "commit", "-m", "Keep Windows capture bound to its configured display")
 subprocess.run(["git", "-C", str(target), "push", "origin", f"HEAD:refs/heads/{BRANCH}"], check=True)

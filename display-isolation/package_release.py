@@ -7,7 +7,7 @@ import subprocess
 import xml.etree.ElementTree as ET
 import zipfile
 
-from verify_source import verify, BASE
+from verify_source import verify, BASE, HEADER_SHA256
 
 EXPECTED = {
     "display-test-results.xml": "a31d5299cf652d1ef2bcce00131b300a30db5685e0ea2e0a2401b4aaebe98dc2",
@@ -65,7 +65,9 @@ record = {
     "BuildDate": "2026-10-30",
     "DisplayConfigurationTests": {"Passed": 152, "Failed": 0},
     "RuntimeSourceVerification": "Exact reviewed patch and policy hashes matched",
-    "Files": {name: EXPECTED[name] for name in ("sunshine.exe", "zlib1.dll", "source.patch", "strict_display_policy.h")},
+    "Files": {name: EXPECTED[name] for name in ("sunshine.exe", "zlib1.dll")},
+    "ReviewedPatchSHA256": EXPECTED["source.patch"],
+    "DisplayPolicySHA256": HEADER_SHA256,
 }
 (package / "BUILD.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
 shutil.copy2(extracted / "toolchain-packages.txt", package / "toolchain-packages.txt")
