@@ -1,0 +1,189 @@
+diff --git a/src/platform/windows/display_base.cpp b/src/platform/windows/display_base.cpp
+index 151b8a6..dd381c7 100644
+--- a/src/platform/windows/display_base.cpp
++++ b/src/platform/windows/display_base.cpp
+@@ -41,6 +41,7 @@ typedef enum _D3DKMT_GPU_PREFERENCE_QUERY_STATE : DWORD {
+ #include "misc.h"
+ #include "src/config.h"
+ #include "src/display_device.h"
++#include "src/strict_display_policy.h"
+ #include "src/logging.h"
+ #include "src/platform/common.h"
+ #include "src/video.h"
+@@ -209,7 +210,27 @@ namespace platf::dxgi {
+     release_frame();
+   }
+ 
++  namespace {
++    bool output_matches_configuration(output_t &output) {
++      if (config::video.output_name.empty()) {
++        return true;
++      }
++      DXGI_OUTPUT_DESC desc {};
++      if (!output || FAILED(output->GetDesc(&desc))) {
++        return false;
++      }
++      return ::video::display_selection::binding_matches(
++        display_device::map_output_name(config::video.output_name),
++        utf_utils::to_utf8(desc.DeviceName)
++      );
++    }
++  }
++
+   capture_e display_base_t::capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) {
++    // Check the bound output again after backend initialization, before delivering frames.
++    if (!output_matches_configuration(output)) {
++      return capture_e::reinit;
++    }
+     auto adjust_client_frame_rate = [&]() -> DXGI_RATIONAL {
+       // Use exactly the requested rate if the client sent an X100 value
+       if (client_frame_rate_strict.Numerator > 0) {
+@@ -448,6 +469,10 @@ namespace platf::dxgi {
+   }
+ 
+   int display_base_t::init(const ::video::config_t &config, const std::string &display_name) {
++    if (!config::video.output_name.empty() &&
++        !::video::display_selection::binding_matches(display_device::map_output_name(config::video.output_name), display_name)) {
++      return -1;
++    }
+     std::once_flag windows_cpp_once_flag;
+ 
+     std::call_once(windows_cpp_once_flag, []() {
+@@ -558,6 +583,10 @@ namespace platf::dxgi {
+       BOOST_LOG(error) << "Failed to locate an output device"sv;
+       return -1;
+     }
++    if (!output_matches_configuration(output)) {
++      BOOST_LOG(error) << "Configured display changed during capture initialization";
++      return -1;
++    }
+ 
+     D3D_FEATURE_LEVEL featureLevels[] {
+       D3D_FEATURE_LEVEL_11_1,
+diff --git a/src/video.cpp b/src/video.cpp
+index 843a19a..0bad8e3 100644
+--- a/src/video.cpp
++++ b/src/video.cpp
+@@ -28,6 +28,7 @@ extern "C" {
+ #include "cbs.h"
+ #include "config.h"
+ #include "display_device.h"
++#include "strict_display_policy.h"
+ #include "globals.h"
+ #include "input.h"
+ #include "logging.h"
+@@ -1495,6 +1496,14 @@ namespace video {
+     }
+   }
+ 
++  bool strict_output_configured() {
++#ifdef _WIN32
++    return !config::video.output_name.empty();
++#else
++    return false;
++#endif
++  }
++
+   /**
+    * @brief Update the list of display names before or during a stream.
+    * @details This will attempt to keep `current_display_index` pointing at the same display.
+@@ -1502,9 +1511,13 @@ namespace video {
+    * @param display_names The list of display names to repopulate.
+    * @param current_display_index The current display index or -1 if not yet known.
+    */
+-  void refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index) {
++  bool refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index) {
+     // It is possible that the output name may be empty even if it wasn't before (device disconnected) or vice-versa
+     const auto output_name {display_device::map_output_name(config::video.output_name)};
++    if (strict_output_configured()) {
++      // Resolve the configured identity again on every recovery. Probe only this output.
++      return display_selection::pin_mapped_output(output_name, display_names, current_display_index);
++    }
+     std::string current_display_name;
+ 
+     // If we have a current display index, let's start with that
+@@ -1520,7 +1533,7 @@ namespace video {
+     if (display_names.empty() && !old_display_names.empty()) {
+       BOOST_LOG(error) << "No displays were found after reenumeration!"sv;
+       display_names = std::move(old_display_names);
+-      return;
++      return true;
+     } else if (display_names.empty()) {
+       display_names.emplace_back(output_name);
+     }
+@@ -1533,7 +1546,7 @@ namespace video {
+       for (int x = 0; x < display_names.size(); ++x) {
+         if (display_names[x] == current_display_name) {
+           current_display_index = x;
+-          return;
++          return true;
+         }
+       }
+ 
+@@ -1543,10 +1556,11 @@ namespace video {
+       for (int x = 0; x < display_names.size(); ++x) {
+         if (display_names[x] == output_name) {
+           current_display_index = x;
+-          return;
++          return true;
+         }
+       }
+     }
++    return true;
+   }
+ 
+   /**
+@@ -1590,7 +1604,10 @@ namespace video {
+     // get the most up-to-date list available monitors
+     std::vector<std::string> display_names;
+     int display_p = -1;
+-    refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
++    if (!refresh_displays(encoder.platform_formats->dev_type, display_names, display_p)) {
++      BOOST_LOG(error) << "Configured display is unavailable; capture was not started";
++      return;
++    }
+     auto disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
+     if (!disp) {
+       return;
+@@ -1773,13 +1790,21 @@ namespace video {
+               std::this_thread::sleep_for(20ms);
+             }
+ 
++            const display_selection::recovery_budget retry_budget {strict_output_configured()};
+             while (capture_ctx_queue->running()) {
++              if (capture_ctxs.empty() || retry_budget.expired()) {
++                BOOST_LOG(error) << "Display recovery ended without an available configured output";
++                return;
++              }
+               // Release the display before reenumerating displays, since some capture backends
+               // only support a single display session per device/application.
+               disp.reset();
+ 
+               // Refresh display names since a display removal might have caused the reinitialization
+-              refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
++              if (!refresh_displays(encoder.platform_formats->dev_type, display_names, display_p)) {
++                std::this_thread::sleep_for(200ms);
++                continue;
++              }
+ 
+               // Process any pending display switch with the new list of displays
+               if (switch_display_event->peek()) {
+@@ -2703,9 +2728,17 @@ namespace video {
+       synced_session_ctxs.emplace_back(std::make_unique<sync_session_ctx_t>(std::move(*ctx)));
+     }
+ 
++    const display_selection::recovery_budget retry_budget {strict_output_configured()};
+     while (encode_session_ctx_queue.running()) {
++      if (retry_budget.expired()) {
++        BOOST_LOG(error) << "Display recovery ended without an available configured output";
++        return encode_e::error;
++      }
+       // Refresh display names since a display removal might have caused the reinitialization
+-      refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
++      if (!refresh_displays(encoder.platform_formats->dev_type, display_names, display_p)) {
++        std::this_thread::sleep_for(200ms);
++        continue;
++      }
+ 
+       // Process any pending display switch with the new list of displays
+       if (switch_display_event->peek()) {

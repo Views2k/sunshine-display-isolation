@@ -41,6 +41,7 @@ typedef enum _D3DKMT_GPU_PREFERENCE_QUERY_STATE : DWORD {
 #include "misc.h"
 #include "src/config.h"
 #include "src/display_device.h"
+#include "src/strict_display_policy.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/video.h"
@@ -209,7 +210,27 @@ namespace platf::dxgi {
     release_frame();
   }
 
+  namespace {
+    bool output_matches_configuration(output_t &output) {
+      if (config::video.output_name.empty()) {
+        return true;
+      }
+      DXGI_OUTPUT_DESC desc {};
+      if (!output || FAILED(output->GetDesc(&desc))) {
+        return false;
+      }
+      return ::video::display_selection::binding_matches(
+        display_device::map_output_name(config::video.output_name),
+        utf_utils::to_utf8(desc.DeviceName)
+      );
+    }
+  }
+
   capture_e display_base_t::capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) {
+    // Check the bound output again after backend initialization, before delivering frames.
+    if (!output_matches_configuration(output)) {
+      return capture_e::reinit;
+    }
     auto adjust_client_frame_rate = [&]() -> DXGI_RATIONAL {
       // Use exactly the requested rate if the client sent an X100 value
       if (client_frame_rate_strict.Numerator > 0) {
@@ -448,6 +469,10 @@ namespace platf::dxgi {
   }
 
   int display_base_t::init(const ::video::config_t &config, const std::string &display_name) {
+    if (!config::video.output_name.empty() &&
+        !::video::display_selection::binding_matches(display_device::map_output_name(config::video.output_name), display_name)) {
+      return -1;
+    }
     std::once_flag windows_cpp_once_flag;
 
     std::call_once(windows_cpp_once_flag, []() {
@@ -556,6 +581,10 @@ namespace platf::dxgi {
 
     if (!output) {
       BOOST_LOG(error) << "Failed to locate an output device"sv;
+      return -1;
+    }
+    if (!output_matches_configuration(output)) {
+      BOOST_LOG(error) << "Configured display changed during capture initialization";
       return -1;
     }
 

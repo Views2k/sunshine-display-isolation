@@ -28,6 +28,7 @@ extern "C" {
 #include "cbs.h"
 #include "config.h"
 #include "display_device.h"
+#include "strict_display_policy.h"
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
@@ -1495,6 +1496,14 @@ namespace video {
     }
   }
 
+  bool strict_output_configured() {
+#ifdef _WIN32
+    return !config::video.output_name.empty();
+#else
+    return false;
+#endif
+  }
+
   /**
    * @brief Update the list of display names before or during a stream.
    * @details This will attempt to keep `current_display_index` pointing at the same display.
@@ -1502,9 +1511,13 @@ namespace video {
    * @param display_names The list of display names to repopulate.
    * @param current_display_index The current display index or -1 if not yet known.
    */
-  void refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index) {
+  bool refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index) {
     // It is possible that the output name may be empty even if it wasn't before (device disconnected) or vice-versa
     const auto output_name {display_device::map_output_name(config::video.output_name)};
+    if (strict_output_configured()) {
+      // Resolve the configured identity again on every recovery. Probe only this output.
+      return display_selection::pin_mapped_output(output_name, display_names, current_display_index);
+    }
     std::string current_display_name;
 
     // If we have a current display index, let's start with that
@@ -1520,7 +1533,7 @@ namespace video {
     if (display_names.empty() && !old_display_names.empty()) {
       BOOST_LOG(error) << "No displays were found after reenumeration!"sv;
       display_names = std::move(old_display_names);
-      return;
+      return true;
     } else if (display_names.empty()) {
       display_names.emplace_back(output_name);
     }
@@ -1533,7 +1546,7 @@ namespace video {
       for (int x = 0; x < display_names.size(); ++x) {
         if (display_names[x] == current_display_name) {
           current_display_index = x;
-          return;
+          return true;
         }
       }
 
@@ -1543,10 +1556,11 @@ namespace video {
       for (int x = 0; x < display_names.size(); ++x) {
         if (display_names[x] == output_name) {
           current_display_index = x;
-          return;
+          return true;
         }
       }
     }
+    return true;
   }
 
   /**
@@ -1590,7 +1604,10 @@ namespace video {
     // get the most up-to-date list available monitors
     std::vector<std::string> display_names;
     int display_p = -1;
-    refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
+    if (!refresh_displays(encoder.platform_formats->dev_type, display_names, display_p)) {
+      BOOST_LOG(error) << "Configured display is unavailable; capture was not started";
+      return;
+    }
     auto disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
     if (!disp) {
       return;
@@ -1773,13 +1790,21 @@ namespace video {
               std::this_thread::sleep_for(20ms);
             }
 
+            const display_selection::recovery_budget retry_budget {strict_output_configured()};
             while (capture_ctx_queue->running()) {
+              if (capture_ctxs.empty() || retry_budget.expired()) {
+                BOOST_LOG(error) << "Display recovery ended without an available configured output";
+                return;
+              }
               // Release the display before reenumerating displays, since some capture backends
               // only support a single display session per device/application.
               disp.reset();
 
               // Refresh display names since a display removal might have caused the reinitialization
-              refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
+              if (!refresh_displays(encoder.platform_formats->dev_type, display_names, display_p)) {
+                std::this_thread::sleep_for(200ms);
+                continue;
+              }
 
               // Process any pending display switch with the new list of displays
               if (switch_display_event->peek()) {
@@ -2703,9 +2728,17 @@ namespace video {
       synced_session_ctxs.emplace_back(std::make_unique<sync_session_ctx_t>(std::move(*ctx)));
     }
 
+    const display_selection::recovery_budget retry_budget {strict_output_configured()};
     while (encode_session_ctx_queue.running()) {
+      if (retry_budget.expired()) {
+        BOOST_LOG(error) << "Display recovery ended without an available configured output";
+        return encode_e::error;
+      }
       // Refresh display names since a display removal might have caused the reinitialization
-      refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
+      if (!refresh_displays(encoder.platform_formats->dev_type, display_names, display_p)) {
+        std::this_thread::sleep_for(200ms);
+        continue;
+      }
 
       // Process any pending display switch with the new list of displays
       if (switch_display_event->peek()) {
