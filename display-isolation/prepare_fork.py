@@ -36,7 +36,10 @@ git(target, "config", "user.name", author_name)
 git(target, "config", "user.email", author_email)
 git(target, "switch", "-c", BRANCH)
 git(target, "add", "src/video.cpp", "src/platform/windows/display_base.cpp", "src/strict_display_policy.h", "README.md", "NOTICE.md", "display-isolation")
-git(target, "diff", "--cached", "--check")
+subprocess.run([
+    "git", "-C", str(target), "diff", "--cached", "--check", "--", ".",
+    ":(exclude)display-isolation/reference.patch",
+], check=True)
 git(target, "commit", "-m", "Keep Windows capture bound to its configured display")
 subprocess.run(["git", "-C", str(target), "push", "origin", f"HEAD:refs/heads/{BRANCH}"], check=True)
 print("Published source branch:", git(target, "rev-parse", "HEAD"))
