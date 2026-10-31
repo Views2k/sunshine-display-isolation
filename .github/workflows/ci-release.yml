@@ -27,6 +27,8 @@ jobs:
       release_version: ${{ github.event.release.tag_name }}
 
   copr:
+    if: >-
+      github.repository == 'LizardByte/Sunshine'
     name: Copr
     permissions:
       contents: write  # needed to update releases

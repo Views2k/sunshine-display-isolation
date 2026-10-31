@@ -15,12 +15,16 @@ concurrency:
 
 jobs:
   github-env:
+    if: >-
+      github.repository == 'LizardByte/Sunshine'
     name: GitHub Env Debug
     permissions:
       contents: read
     uses: LizardByte/.github/.github/workflows/__call-github-env.yml@master
 
   release-setup:
+    if: >-
+      github.repository == 'LizardByte/Sunshine'
     name: Release Setup
     outputs:
       publish_release: ${{ steps.release-setup.outputs.publish_release }}
@@ -43,6 +47,8 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
   build-docker:
+    if: >-
+      github.repository == 'LizardByte/Sunshine'
     name: Docker
     needs: release-setup
     permissions:
@@ -64,6 +70,8 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-freebsd:
+    if: >-
+      github.repository == 'LizardByte/Sunshine'
     name: FreeBSD
     needs: release-setup
     permissions:
@@ -74,6 +82,8 @@ jobs:
       release_version: ${{ needs.release-setup.outputs.release_version }}
 
   build-homebrew:
+    if: >-
+      github.repository == 'LizardByte/Sunshine'
     name: Homebrew
     needs: release-setup
     permissions:
@@ -90,6 +100,8 @@ jobs:
       GIT_EMAIL: ${{ secrets.GH_BOT_EMAIL }}
 
   build-macos:
+    if: >-
+      github.repository == 'LizardByte/Sunshine'
     name: macOS
     needs: release-setup
     permissions:
@@ -110,6 +122,8 @@ jobs:
         ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_CERTIFICATE_P12_PASSWORD }}
 
   build-linux:
+    if: >-
+      github.repository == 'LizardByte/Sunshine'
     name: Linux
     needs: release-setup
     permissions:
@@ -120,6 +134,8 @@ jobs:
       release_version: ${{ needs.release-setup.outputs.release_version }}
 
   build-archlinux:
+    if: >-
+      github.repository == 'LizardByte/Sunshine'
     name: Archlinux
     needs: release-setup
     permissions:
@@ -130,6 +146,8 @@ jobs:
       release_version: ${{ needs.release-setup.outputs.release_version }}
 
   build-alpine:
+    if: >-
+      github.repository == 'LizardByte/Sunshine'
     name: Alpine
     needs: release-setup
     permissions:
@@ -141,7 +159,9 @@ jobs:
 
   build-linux-copr:
     name: Linux Copr
-    if: github.event_name != 'push'  # releases are handled directly in ci-release.yml
+    if: >-
+      github.repository == 'LizardByte/Sunshine' &&
+      (github.event_name != 'push')
     needs: release-setup
     permissions:
       contents: write  # needed to update releases
@@ -153,6 +173,8 @@ jobs:
       VIRUSTOTAL_API_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
 
   build-linux-flatpak:
+    if: >-
+      github.repository == 'LizardByte/Sunshine'
     name: Linux Flatpak
     needs: release-setup
     permissions:
@@ -163,6 +185,8 @@ jobs:
       release_version: ${{ needs.release-setup.outputs.release_version }}
 
   build-windows:
+    if: >-
+      github.repository == 'LizardByte/Sunshine'
     name: Windows
     needs: release-setup
     permissions:
@@ -181,12 +205,16 @@ jobs:
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
 
   test-powershell:
+    if: >-
+      github.repository == 'LizardByte/Sunshine'
     name: PowerShell
     permissions:
       contents: read
     uses: ./.github/workflows/ci-powershell.yml
 
   web-ui:
+    if: >-
+      github.repository == 'LizardByte/Sunshine'
     name: Web UI
     needs: release-setup
     permissions:
